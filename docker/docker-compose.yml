@@ -1,0 +1,240 @@
+services:
+
+  # ─────────────────────────────────────────
+  # ZOOKEEPER — Kafka coordinator
+  # ─────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: gitpulse-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - ../data/zookeeper-data:/var/lib/zookeeper/data
+      - ../data/zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - gitpulse-net
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # KAFKA — Message broker
+  # ─────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: gitpulse-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - ../data/kafka-data:/var/lib/kafka/data
+    ports:
+      - "9092:9092"
+    networks:
+      - gitpulse-net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # KAFKA UI — Visual topic browser
+  # ─────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: gitpulse-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: GitPulse-Local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    ports:
+      - "8080:8080"
+    networks:
+      - gitpulse-net
+
+  # ─────────────────────────────────────────
+  # SPARK MASTER — Cluster coordinator
+  # ─────────────────────────────────────────
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: gitpulse-spark-master
+    restart: unless-stopped
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+    volumes:
+      - ../spark_jobs:/opt/spark_jobs
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    networks:
+      - gitpulse-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # SPARK WORKER — Runs actual computations
+  # ─────────────────────────────────────────
+  spark-worker:
+    image: apache/spark:3.5.0
+    container_name: gitpulse-spark-worker
+    restart: unless-stopped
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: "2"
+    volumes:
+      - ../spark_jobs:/opt/spark_jobs
+    ports:
+      - "8082:8081"
+    networks:
+      - gitpulse-net
+
+  # ─────────────────────────────────────────
+  # POSTGRESQL — Airflow metadata + app data
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: gitpulse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitpulse
+      POSTGRES_PASSWORD: gitpulse123
+      POSTGRES_DB: airflow_db
+    volumes:
+      - ../data/postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - gitpulse-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitpulse -d airflow_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # MINIO — Local S3 (Bronze / Silver / Gold)
+  # ─────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: gitpulse-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: gitpulse
+      MINIO_ROOT_PASSWORD: gitpulse123
+    volumes:
+      - ../data/minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - gitpulse-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # AIRFLOW — Pipeline orchestrator
+  # ─────────────────────────────────────────
+  airflow:
+    image: apache/airflow:2.8.0
+    container_name: gitpulse-airflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://gitpulse:gitpulse123@postgres:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__WEBSERVER__SECRET_KEY: "gitpulse_secret_key_2024"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      # MinIO connection for DAGs
+      AWS_ACCESS_KEY_ID: gitpulse
+      AWS_SECRET_ACCESS_KEY: gitpulse123
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ../dags:/opt/airflow/dags
+      - ../data/gharchive:/opt/airflow/gharchive
+      - ../models:/opt/airflow/models
+    ports:
+      - "8090:8080"
+    command: >
+      bash -c "airflow db init &&
+               airflow users create --username admin --password admin
+               --firstname GitPulse --lastname Admin
+               --role Admin --email admin@gitpulse.com &&
+               airflow webserver & airflow scheduler"
+    networks:
+      - gitpulse-net
+
+  # ─────────────────────────────────────────
+  # STREAMLIT — User dashboard
+  # ─────────────────────────────────────────
+  streamlit:
+    image: python:3.11-slim
+    container_name: gitpulse-streamlit
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: gitpulse
+      DB_PASSWORD: gitpulse123
+      DB_NAME: gitpulse_db
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: gitpulse
+      MINIO_SECRET_KEY: gitpulse123
+    volumes:
+      - ../dashboard:/app
+    working_dir: /app
+    command: >
+      bash -c "pip install streamlit pandas psycopg2-binary boto3 plotly --quiet &&
+               streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
+    ports:
+      - "8501:8501"
+    networks:
+      - gitpulse-net
+
+# ─────────────────────────────────────────
+# NETWORK
+# ─────────────────────────────────────────
+networks:
+  gitpulse-net:
+    driver: bridge
+    name: gitpulse-network

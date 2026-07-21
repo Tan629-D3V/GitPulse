@@ -1,0 +1,22 @@
+# Data & Raw Downloads (Crucial for Big Data repos)
+data/
+*.gz
+*.json
+*.parquet
+
+# Environment Variables & Credentials
+.env
+*.pem
+
+# Python & Spark Temp Files
+__pycache__/
+*.pyc
+.pytest_cache/
+spark-warehouse/
+metastore_db/
+
+# OS / Editor specific
+.DS_Store
+.idea/
+.vscode/
+
