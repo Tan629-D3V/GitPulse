@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
 
   # ─────────────────────────────────────────
@@ -65,7 +67,7 @@ services:
         condition: service_healthy
     environment:
       KAFKA_CLUSTERS_0_NAME: GitPulse-Local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:29092
     ports:
       - "8080:8080"
     networks:
@@ -123,10 +125,11 @@ services:
     image: postgres:15
     container_name: gitpulse-postgres
     restart: unless-stopped
+    env_file: .env
     environment:
-      POSTGRES_USER: gitpulse
-      POSTGRES_PASSWORD: gitpulse123
-      POSTGRES_DB: airflow_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ../data/postgres-data:/var/lib/postgresql/data
     ports:
@@ -147,9 +150,10 @@ services:
     container_name: gitpulse-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
+    env_file: .env
     environment:
-      MINIO_ROOT_USER: gitpulse
-      MINIO_ROOT_PASSWORD: gitpulse123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - ../data/minio-data:/data
     ports:
@@ -175,16 +179,17 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    env_file: .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://gitpulse:gitpulse123@postgres:5432/airflow_db
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
-      AIRFLOW__WEBSERVER__SECRET_KEY: "gitpulse_secret_key_2024"
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__FERNET_KEY}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       # MinIO connection for DAGs
-      AWS_ACCESS_KEY_ID: gitpulse
-      AWS_SECRET_ACCESS_KEY: gitpulse123
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     volumes:
       - ../dags:/opt/airflow/dags
@@ -205,27 +210,29 @@ services:
   # STREAMLIT — User dashboard
   # ─────────────────────────────────────────
   streamlit:
-    image: python:3.11-slim
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
     container_name: gitpulse-streamlit
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    env_file: .env
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USER: gitpulse
-      DB_PASSWORD: gitpulse123
-      DB_NAME: gitpulse_db
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${STREAMLIT_DB_NAME}
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: gitpulse
-      MINIO_SECRET_KEY: gitpulse123
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     volumes:
       - ../dashboard:/app
     working_dir: /app
     command: >
-      bash -c "pip install streamlit pandas psycopg2-binary boto3 plotly --quiet &&
-               streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
+      streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
     networks:
