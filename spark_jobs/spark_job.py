@@ -20,12 +20,15 @@ Env vars expected (set these in your .env / docker-compose):
   PG_PORT            5432
   PG_DB               gitpulse
   PG_USER
-  PG_PASSWORD
+    password=os.environ.get("PG_PASSWORD", ""),
   GHARCHIVE_INPUT_PATH   local/mounted path to your downloaded .json.gz files
   CURATED_REPOS_PATH     path to a text file, one "owner/repo" per line
 """
 
 import os
+
+import boto3
+from botocore.exceptions import ClientError
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
 
@@ -87,6 +90,28 @@ print(f"[GitPulse] Bronze layer row count after filtering: {bronze_count}")
 # ---------------------------------------------------------------------------
 # 4. Write bronze layer to MinIO (S3-compatible), partitioned by event type
 # ---------------------------------------------------------------------------
+MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://minio:9000").rstrip("/")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
+BRONZE_BUCKET = "gitpulse-bronze"
+
+s3_client = boto3.client(
+    "s3",
+    endpoint_url=MINIO_ENDPOINT,
+    aws_access_key_id=MINIO_ACCESS_KEY,
+    aws_secret_access_key=MINIO_SECRET_KEY,
+    region_name="us-east-1",
+)
+
+try:
+    s3_client.head_bucket(Bucket=BRONZE_BUCKET)
+except ClientError as exc:
+    error_code = exc.response.get("Error", {}).get("Code")
+    if error_code in {"404", "NoSuchBucket"}:
+        s3_client.create_bucket(Bucket=BRONZE_BUCKET)
+    else:
+        raise
+
 BRONZE_PATH = "s3a://gitpulse-bronze/events/"
 bronze.write.mode("overwrite").partitionBy("type").parquet(BRONZE_PATH)
 print(f"[GitPulse] Bronze layer written to {BRONZE_PATH}")
