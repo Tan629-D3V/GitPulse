@@ -10,3 +10,4 @@ minio_data/
 .ipynb_checkpoints/
 producer.log
 consumer.log
+.vscode/
