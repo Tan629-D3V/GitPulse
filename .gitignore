@@ -8,3 +8,5 @@ venv/
 postgres_data/
 minio_data/
 .ipynb_checkpoints/
+producer.log
+consumer.log
