@@ -28,6 +28,7 @@ with open("curated_repos.txt") as f:
 if KAFKA_USERNAME:
     producer = KafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
+        api_version=(2, 8, 1),
         security_protocol="SASL_SSL",
         sasl_mechanism="SCRAM-SHA-256",
         sasl_plain_username=KAFKA_USERNAME,
@@ -37,6 +38,7 @@ if KAFKA_USERNAME:
 else:
     producer = KafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
+        api_version=(2, 8, 1),
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
     )
 

@@ -1,27 +1,5 @@
-version: "3.9"
 
 services:
-
-  # ─────────────────────────────────────────
-  # ZOOKEEPER — Kafka coordinator
-  # ─────────────────────────────────────────
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    container_name: gitpulse-zookeeper
-    restart: unless-stopped
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - ../data/zookeeper-data:/var/lib/zookeeper/data
-      - ../data/zookeeper-logs:/var/lib/zookeeper/log
-    networks:
-      - gitpulse-net
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ─────────────────────────────────────────
   # KAFKA — Message broker
@@ -30,19 +8,20 @@ services:
     image: confluentinc/cp-kafka:7.5.0
     container_name: gitpulse-kafka
     restart: unless-stopped
-    depends_on:
-      zookeeper:
-        condition: service_healthy
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_LOG_RETENTION_HOURS: 168
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: "ACgZxJ4PRm22DiPQ8xlR7A"
     volumes:
       - ../data/kafka-data:/var/lib/kafka/data
     ports:
@@ -54,6 +33,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+
 
   # ─────────────────────────────────────────
   # KAFKA UI — Visual topic browser
@@ -137,7 +117,8 @@ services:
     networks:
       - gitpulse-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gitpulse -d airflow_db"]
+      # FIXED: was checking "airflow_db" which doesn't exist — actual DB is "gitpulse"
+      test: ["CMD-SHELL", "pg_isready -U gitpulse -d gitpulse"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -235,6 +216,62 @@ services:
       streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
+    networks:
+      - gitpulse-net
+
+  # ─────────────────────────────────────────
+  # PRODUCER — Polls GitHub Events API, publishes to Kafka
+  # ─────────────────────────────────────────
+  producer:
+    build:
+      context: ../stream
+      dockerfile: Dockerfile
+    container_name: gitpulse-producer
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+      # NOTE: kafka:29092 is the INTERNAL container-network listener —
+      # NOT the host-mapped localhost:9092 used when running producer.py
+      # directly on the WSL host. This is the single most important
+      # difference between running these scripts on-host vs. in-container.
+      KAFKA_BOOTSTRAP: kafka:29092
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+    volumes:
+      - ../curated_repos.txt:/app/curated_repos.txt:ro
+    command: python3 producer.py
+    networks:
+      - gitpulse-net
+      
+  # ─────────────────────────────────────────
+  # CONSUMER — Reads from Kafka, writes to Postgres
+  # ─────────────────────────────────────────
+  consumer:
+    build:
+      context: ../stream
+      dockerfile: Dockerfile
+    container_name: gitpulse-consumer
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      KAFKA_BOOTSTRAP: kafka:29092
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DB: ${POSTGRES_DB}
+      PG_USER: ${POSTGRES_USER}
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_SSLMODE: prefer
+    command: python3 consumer.py
     networks:
       - gitpulse-net
 

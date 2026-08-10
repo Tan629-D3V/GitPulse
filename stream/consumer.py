@@ -41,6 +41,7 @@ cur.execute(
 
 consumer_kwargs = dict(
     bootstrap_servers=KAFKA_BOOTSTRAP,
+    api_version=(2, 8, 1),
     value_deserializer=lambda v: json.loads(v.decode("utf-8")),
     auto_offset_reset="earliest",
     enable_auto_commit=True,
@@ -74,6 +75,8 @@ for msg in consumer:
                 json.dumps(e),
             ),
         )
-        print(f"[consumer] inserted {e['id']} ({e.get('type')}) for {e.get('repo', {}).get('name')}")
+        print(
+            f"[consumer] inserted {e['id']} ({e.get('type')}) for {e.get('repo', {}).get('name')}"
+        )
     except Exception as exc:
         print(f"[consumer] insert error for event {e.get('id')}: {exc}")
