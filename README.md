@@ -2,11 +2,9 @@
 
 **Real-Time & Batch Analytics for Predicting GitHub Repository Abandonment Risk**
 
-A data engineering + machine learning diploma project combining streaming and batch pipelines
+A data engineering + machine learning project combining streaming and batch pipelines
 to monitor a curated set of GitHub repositories and predict abandonment risk before a project
 goes fully silent.
-
-Project by: Tanmay Chouhan (262549), Atharva Waghmare (262505) — PGCP-BDA, CDAC
 
 ---
 
